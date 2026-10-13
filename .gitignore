@@ -1,0 +1,36 @@
+# ---------------- Python ----------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+*.spec
+
+# ---------------- 数据缓存（大文件，不入库） ----------------
+# 行情 parquet / FRED·CBOE 宏观缓存 / 上次有效偏置记录
+data/cache/*.parquet
+data/cache/*.csv
+data/cache/last_fundamental.json
+
+# ---------------- 运行产物（每次自动生成，不入库） ----------------
+output/report.html
+output/gold_signal.ini
+output/run_daily.log
+output/_*.ini
+output/_*.csv
+
+# ---------------- 回测 / 验证临时产物 ----------------
+output/_t*
+
+# ---------------- MT5 本地路径 ----------------
+# 终端安装目录含用户名 / 券商账号等敏感信息，切勿入库。
+# 例如：C:/Program Files/MetaTrader 5 .../MQL5/Files/
+# 部署时请手动把 mql5/ 下文件复制到你的 MT5 终端对应目录。
+
+# ---------------- 系统 / 编辑器 ----------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

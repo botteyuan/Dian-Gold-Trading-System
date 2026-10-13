@@ -1,0 +1,10 @@
+# 核心（必需）
+pandas>=2.0
+numpy>=1.24
+pyyaml>=6.0
+pyarrow>=12.0        # parquet 缓存
+
+# 数据源（按需）
+MetaTrader5>=5.0.45  # Windows + 已安装 MT5 终端时可用
+yfinance>=0.2.40     # 无 MT5 时的行情与宏观代理数据
+requests>=2.31

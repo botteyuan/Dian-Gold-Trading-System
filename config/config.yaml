@@ -1,0 +1,263 @@
+# ============================================================
+# 帝娜黄金交易系统 / Dina Gold Trading System
+# 依据：《黄金高胜算交易》(魏强斌/欧阳傲杰) + 《黄金短线交易的14堂精品课》
+# ------------------------------------------------------------
+# 行为分析（技术面）  -> MT5 (MQL5) 执行
+# 驱动分析（基本面）  -> Python
+# 历史数据分析/回测  -> Python
+# ============================================================
+
+symbol: XAUUSD            # MT5 中黄金品种名（随券商可能是 XAUUSD / GOLD / XAUUSD.m 等）
+
+timeframes:
+  entry_primary: H1       # 1小时图交易理论（五要件）
+  entry_secondary: H4     # 4小时图交易理论（三形态）
+  trend_filter: D1        # 驱动/趋势过滤
+
+# ------------------------------------------------------------
+# 一、布林带 Bands(13, 0, 1.618)  —— 书中明确参数
+# 书中原话："我们这里使用的布林带是参数为(13,0,1.618)的布林带"
+# 用途：中观敛散节点（收口->张口）、乖离、出场（外轨/中轨）
+# ------------------------------------------------------------
+bollinger:
+  period: 13
+  deviation: 1.618
+  ma_method: SMA
+  # 收口判定：当前带宽处于过去 squeeze_lookback 根的分位数以下
+  squeeze_lookback: 120
+  squeeze_percentile: 0.25
+  # 张口确认：带宽连续 expand_bars 根放大
+  expand_bars: 2
+
+# ------------------------------------------------------------
+# 二、顾比复合移动平均线（Guppy Multiple Moving Average）
+# 短期组 6 条 + 长期组 6 条；书中：交叉=提醒信号，回档=确认信号
+# ------------------------------------------------------------
+guppy:
+  short: [3, 5, 8, 10, 12, 15]
+  long: [30, 35, 40, 45, 50, 60]
+  ma_method: EMA
+  # 回档判定：短期组均值与长期组均值的距离回缩至 cross_atr_ratio*ATR 以内，
+  # 且未发生反向穿越
+  pullback_atr_ratio: 0.60
+  # 交叉后最多多少根K线内认这个回档有效
+  pullback_valid_bars: 60
+
+# ------------------------------------------------------------
+# 三、随机震荡指标（Stochastic Oscillator）——"过度"
+# 下降趋势中超买=收敛末端；上升趋势中超卖=收敛末端
+# ------------------------------------------------------------
+stochastic:
+  k_period: 5
+  d_period: 3
+  slowing: 3
+  overbought: 80
+  oversold: 20
+
+# ------------------------------------------------------------
+# 四、轴心点混合菲波纳奇分割线 ——"适离"（位）
+# ------------------------------------------------------------
+fibonacci:
+  retracements: [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+  extensions: [1.272, 1.618, 2.618]
+  swing_left: 5            # 分形左腿
+  swing_right: 5           # 分形右腿
+  swing_lookback: 200      # 摆动点搜索窗口
+pivot:
+  enabled: true            # 轴心点系统（Floor/经典）
+  method: classic          # classic | fibonacci | woodie
+# 适离：价格与关键位距离 <= proximity_atr * ATR 视为"到位"
+level_proximity_atr: 0.35
+
+# ------------------------------------------------------------
+# 五、蜡烛翻转 / 影线渐短 ——"渐短"（态，微观敛散）
+# ------------------------------------------------------------
+candle:
+  # 小实体：实体 <= 过去 body_lookback 根平均实体的 shrink_ratio
+  body_lookback: 20
+  small_body_ratio: 0.60
+  # 长影线：影线总长 >= 实体的 shadow_multiple 倍
+  shadow_multiple: 1.5
+  # 实体/全幅 上限（十字星类）
+  doji_body_range_ratio: 0.10
+
+# ------------------------------------------------------------
+# 进场规则
+# ------------------------------------------------------------
+entry:
+  # min_score: 五要件中至少满足几项才进场。
+  #   5=全中（原始设置，约 0.5 次/周，样本内几乎不盈利）
+  #   3=回档(必须) + 其余四项中任意两项 —— 实测频率约 2.3 次/周，
+  #     样本内 PF 1.35 / 样本外 PF 1.16，为"频率—盈利"的最佳平衡点。
+  min_score: 3
+  require_pullback: true   # "回档"是必须满足的第一要件（势）
+  trade_signal_bar: next   # 确认信号K线收盘后，下一根K线开盘进场
+  # 大周期定"势"：只做与日线趋势同向的单。
+  # 当前 EA 实盘为 long-only 无趋势过滤（与做多单边行情一致），故此处关闭，
+  # 使 Python 回测与 EA 实盘口径一致。若要启用，需同时打开 allow_short。
+  trend_filter: false
+  trend_ema: 50
+  allow_long: true
+  # 做空总开关：仅约束 Python 纯技术基线回测（run_daily 的"主绩效"口径，
+  # 用 bias=0/veto=False 跑，便于与技术系统本身对比，故保持 long-only）。
+  # 实盘 B3 的做空能力不由此控制，而由 EA 的 InpAllowShort(=true) + regime 矩阵决定：
+  # 空头只在基本面偏空(bias<0)时由 regime 放行。两者一致。
+  allow_short: false
+  # 4H 三形态共振（原著"帝娜系统"核心）：
+  #   true  = 1H 五要件 且 4H 三形态 同方向 才进场（AND，faithful 原著）
+  #   false = 不要求 4H 确认（纯 1H 五要件，已验证最优）
+  # 【实证结论 2026-09-19】回测(2023-2026 黄金牛市)显示：在 long-only 下，
+  #   任何 4H 共振变体都削弱正期望——
+  #     纯1H        : 406笔 PF=1.22 CAGR=16.5% 次/年=120
+  #     严格AND     :   3笔 PF=0.19 次/年=0.9   (4H形态稀疏且偏空)
+  #     近窗W=12    :  33笔 PF=0.73
+  #     近窗W=24    :  64笔 PF=0.87
+  #   4H 三形态在此周期对做多无加成，反而损耗。故默认关闭，保留纯1H最优系统。
+  #   如需忠实原著或做双向，可改 true（EA 侧对应 InpH4Resonance）。
+  require_h4_resonance: false
+
+  # 多空 regime 开关（基本面偏置 × 日线趋势）— 默认 B3（采纳版，推荐默认口径）
+  #   偏空 + 日线明显下跌   -> 只开空；
+  #   偏空 + 日线无明显下跌 -> 双向(空仓>多仓)；
+  #   偏多 + 日线明显上涨   -> 只开多；
+  #   偏多 + 日线无明显上涨 -> 双向(多仓>空仓)；
+  #   中性 + 日线有方向     -> 只做多（退回已验证多头优势）；
+  #   中性 + 日线无明确趋势 -> 站旁边不开仓（B3 核心：消除"中性平"亏损档）。
+  #   regime_skew_factor = 非优势方向仓位系数(优势方向=1.0)。
+  #   EA 端 InpAllowShort 为做空总安全锁(默认开)；具体多空由 regime 矩阵在 EA/回测中统一决定。
+  #   注：本文件 allow_short 仅约束 Python 纯技术基线回测(long-only 对照)；实盘 B3 的做空能力由
+  #       EA 的 InpAllowShort(=true) + regime 共同决定，二者一致。
+  regime_enabled: true
+  regime_skew_factor: 0.40
+  regime_neutral_long_only: true      # 中性偏置 -> 只做多(不开空)
+  regime_neutral_flat_aside: true     # 中性 + 日线无趋势 -> 站旁边(B3)
+
+# ------------------------------------------------------------
+# 4小时图三形态（涨跌吞没 / 启明黄昏 / 刺透盖顶）
+# 必须"出现在布林带的轨道上"
+# ------------------------------------------------------------
+h4:
+  enabled: true
+  band_touch_atr: 0.50     # 与上轨/下轨的距离 <= 0.5*ATR 视为"在轨道上"
+  engulfing_body_ratio: 1.0  # 吞没：第二根实体 >= 第一根实体 * ratio
+
+# ------------------------------------------------------------
+# 出场（帝娜三定律：必须止损，不止盈，用跟进止损）
+#   - 大幅度运动后：收盘于布林带外轨 -> 减仓/平仓
+#   - 小幅度运动后：收盘于布林带中轨 -> 减仓/平仓
+# ------------------------------------------------------------
+exit:
+  atr_period: 14
+  # 大幅度运动：进场后浮盈 >= big_move_atr * ATR 视为"大幅度运动"
+  big_move_atr: 2.0
+  close_beyond_outer: true   # 大幅运动后收盘破外轨 -> 减仓
+  # 小幅运动后收盘反穿中轨 -> 减仓。
+  # 实测：开启后持仓被压到 2 小时（价格在均线下方概率约 50%，等于随机平仓），
+  # 把趋势利润全部砍掉，PF 从 1.3 掉到 1.0。默认关闭。
+  close_beyond_middle: false
+  partial_frac: 0.5          # 首次触发减仓的比例（书中的"出场信号"=减仓信号）
+  breakeven_after_partial: true  # 减仓后止损移到成本价，剩余仓位交给跟进止损
+  initial_stop_atr: 1.2      # 无可用关键位时的兜底止损距离
+  # 止损离场价的最小距离（ATR 倍数）。这是最关键的出场参数：
+  #   0.8（旧值）-> 84% 的单子会在 24 根内被打掉，而持有 24 根的
+  #                 最大有利偏移中位数是 2.65 ATR —— 盈亏比结构完全倒挂。
+  #   3.0        -> 被打掉概率降到 46%，样本内外 PF 均 > 1。
+  initial_stop_min_atr: 3.0
+  # 最大持有K线数（0=不限）。避免资金被无限期占用。
+  max_hold_bars: 24
+  trailing:
+    enabled: true
+    method: atr              # bollinger(中轨跟踪) | atr | hybrid
+    atr_multiple: 2.0
+    # 浮盈达到该 ATR 后才启动跟踪。旧值 1.0 太早，会把刚起步的盈利单扫出。
+    activate_atr: 2.5
+  reverse_signal_close: true # 出现反向进场信号 -> 平仓
+
+# ------------------------------------------------------------
+# 仓位管理（凯利公式简化版 f* = (p*(R+1)-1)/R）
+# ------------------------------------------------------------
+risk:
+  account_risk_pct: 1.0     # 每次交易最大风险占净值 %
+  kelly_enabled: true
+  kelly_cap: 0.03           # 凯利结果上限：单笔风险最多占净值 3%（防止满仓）
+  kelly_safety: 0.5         # 半凯利
+  max_lots: 5.0
+  min_lots: 0.01
+
+# ------------------------------------------------------------
+# 驱动分析（基本面）—— 黄金驱动的逻辑层次
+#   货币属性：地缘政治、经济增长
+#   投资属性：利率水平、资本流动
+#   商品属性：金饰需求、工业用金
+# ------------------------------------------------------------
+fundamental:
+  weights:
+    geopolitics: 2.0        # 货币属性-地缘政治
+    growth: 1.0             # 货币属性-经济增长
+    real_rate: 2.5          # 投资属性-利率水平（实际利率，权重最高）
+    capital_flow: 1.5       # 投资属性-资本流动
+    jewelry: 0.8            # 商品属性-金饰需求
+    industrial: 0.5         # 商品属性-工业用金
+    central_bank: 1.5       # 货币属性-央行购金
+  # 偏置阈值：|score| >= bias_threshold 才产生方向偏置
+  bias_threshold: 2.0
+  # 基本面只允许"放大/缩小"，不允许单独开仓（行为分析才是进场触发器）
+  # 实测需要关闭否决，原因有二：
+  #   1) 回测主绩效采用"纯技术系统"口径（不含否决），启用会让实盘与回测不一致；
+  #   2) 默认只做多(allow_short=false)，而当前驱动偏空(bias<0)，
+  #      开启否决会导致 EA 完全不下单。
+  # 想要恢复方向否决：改回 true，并同时把 entry.allow_short 打开。
+  veto_enabled: false
+  # 世界黄金协会《Gold Demand Trends》季度供需表（gold.org）
+  # 命中后用实测吨数替换：央行购金 / 资本流动(ETF) / 金饰 / 工业(科技用金)
+  wgc_enabled: true
+  wgc_timeout: 20
+  # 同比% -> 分值 的缩放：同比达到该百分比记 ±1 分，符号翻转(如ETF由流入转流出)直接记 ±2
+  gdt_scale:
+    central_bank: 30.0
+    etf: 30.0
+    jewelry: 30.0
+    technology: 30.0
+  # 手动输入项（世界黄金协会季度数据、央行购金等无法自动抓取的部分）
+  manual:
+    central_bank_buying: 0.0   # -2..+2
+    jewelry_demand: 0.0        # -2..+2
+    industrial_demand: 0.0     # -2..+2
+
+# ------------------------------------------------------------
+# 数据源
+# ------------------------------------------------------------
+data:
+  source: auto              # auto | mt5 | yfinance | csv
+  csv_path: data/XAUUSD_H1.csv
+  cache_dir: data/cache
+  bars: 20000               # H1 抓取根数
+  fred_series:
+    real_rate: DFII10       # 10年期TIPS实际收益率
+    breakeven: T10YIEM      # 10年盈亏平衡通胀率(可选)
+    fed_funds: DFF          # 联邦基金利率
+    cpi: CPIAUCSL           # CPI
+    dollar_index: DTWEXBGS  # 美元指数(广义)
+    industrial: INDPRO      # 工业生产指数
+    vix: VIXCLS             # VIX 波动率（优先用 FRED，yfinance 常被限流）
+  yfinance_tickers:
+    gold: GC=F              # COMEX 黄金连续
+    etf: GLD                # SPDR 黄金ETF（资本流动代理）
+    vix: ^VIX               # 地缘政治/避险情绪代理
+    dollar: DX-Y.NYB        # 美元指数
+
+# ------------------------------------------------------------
+# 回测
+# ------------------------------------------------------------
+backtest:
+  initial_capital: 100000
+  spread_points: 30         # 点差（黄金 2 位小数计价 -> 0.30 美元）
+  commission_per_lot: 0.0
+  point_value: 100          # 1 手 = 100 盎司
+  start: "2022-01-01"
+  end: null
+
+output:
+  dir: output
+  signal_file: gold_signal.ini   # 供 MT5 EA 读取（放 MQL5/Files/）
+  report_file: report.html

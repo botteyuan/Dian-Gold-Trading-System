@@ -60,7 +60,9 @@ def run(f: pd.DataFrame, cfg: Dict, sig: Optional[pd.DataFrame] = None,
         bias: int = 0, size_mult: float = 1.0, veto: bool = True,
         kelly: Optional[float] = None, initial_capital: float = 100000.0,
         use_regime: bool = False, bias_series=None, skew: float = 0.4,
-        neutral_long_only: bool = True, neutral_flat_aside: bool = False) -> Result:
+        neutral_long_only: bool = True, neutral_flat_aside: bool = False,
+        fixed_lot: Optional[float] = None,
+        fixed_risk_pct: Optional[float] = None) -> Result:
     ex = cfg.get("exit", {})
     rk = cfg.get("risk", {})
     bt = cfg.get("backtest", {})
@@ -103,9 +105,26 @@ def run(f: pd.DataFrame, cfg: Dict, sig: Optional[pd.DataFrame] = None,
     max_dd = 0.0
 
     def lots_for(entry: float, stop: float, sm: float = 1.0) -> float:
+        if fixed_lot is not None:
+            # Fixed-lot mode: a constant base lot, still scaled by the regime's
+            # long/short skew (long=longSkew, short=shortSkew). The fundamental
+            # size multiplier is NOT applied, so the lot stays literal.
+            skew_factor = (sm / size_mult) if size_mult > 0 else sm
+            return float(np.clip(fixed_lot * skew_factor,
+                                 rk.get("min_lots", 0.01), rk.get("max_lots", 5.0)))
         dist = abs(entry - stop) * pv
         if dist <= 0:
             return rk.get("min_lots", 0.01)
+        if fixed_risk_pct is not None:
+            # ATR-equalized fixed-risk mode: every trade risks exactly
+            # `fixed_risk_pct` % of equity, with the lot derived from the stop's
+            # ATR distance. Kelly and the fundamental size multiplier are NOT
+            # applied; only the regime long/short skew (longSkew/shortSkew) is
+            # kept, so leverage stays volatility-adaptive but conviction-neutral.
+            skew_factor = (sm / size_mult) if size_mult > 0 else sm
+            amt = equity * fixed_risk_pct / 100.0 * skew_factor
+            l = amt / dist
+            return float(np.clip(l, rk.get("min_lots", 0.01), rk.get("max_lots", 5.0)))
         risk_pct = rk.get("account_risk_pct", 1.0)
         if kelly is not None and kelly > 0:
             # Kelly: f* is used directly as the per-trade risk exposure as a fraction of equity

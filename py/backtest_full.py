@@ -64,6 +64,26 @@ def _tbl(header, data):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fixed-lot", type=float, default=None,
+                    help="fixed-lot mode: constant base lot per trade (still scaled by the "
+                         "regime long/short skew); omit to keep the original risk-% sizing")
+    ap.add_argument("--atr-risk", type=float, default=None,
+                    help="ATR-equalized fixed-risk mode: each trade risks this %% of equity, "
+                         "with the lot derived from the stop ATR distance (kelly/sizeMult off, "
+                         "regime skew kept); omit to keep the original risk-% sizing")
+    ap.add_argument("--capital", type=float, default=None,
+                    help="initial capital in USD for the backtest (default 100000)")
+    args = ap.parse_args()
+    if args.fixed_lot is not None and args.atr_risk is not None:
+        raise SystemExit("--fixed-lot and --atr-risk are mutually exclusive")
+    fixed_lot = args.fixed_lot
+    fixed_risk_pct = args.atr_risk
+    capital = args.capital if args.capital is not None else 100000.0
+    bt_kwargs = dict(fixed_lot=fixed_lot, fixed_risk_pct=fixed_risk_pct,
+                     initial_capital=capital)
+
     cfg = CF.load_config()
     root = CF.project_root()
     out_dir = os.path.join(root, cfg["output"]["dir"])
@@ -103,17 +123,17 @@ def main():
     # ---------------- Four backtest configurations ----------------
     fA = SG.prepare(h1, h4, d1, cfg)
     sA = SG.entry_scores(fA, cfg)
-    rA = BT.run(fA, cfg, sA, bias=0, size_mult=1.0, veto=False)
+    rA = BT.run(fA, cfg, sA, bias=0, size_mult=1.0, veto=False, **bt_kwargs)
 
     cB = _cfg_regime(cfg)
     fB = SG.prepare(h1, h4, d1, cB)
     sB = SG.entry_scores(fB, cB)
     rB = BT.run(fB, cB, sB, use_regime=True, bias_series=bias_arr,
-                skew=skew, size_mult=1.0, neutral_long_only=False)
+                skew=skew, size_mult=1.0, neutral_long_only=False, **bt_kwargs)
     rB2 = BT.run(fB, cB, sB, use_regime=True, bias_series=bias_arr,
-                 skew=skew, size_mult=1.0, neutral_long_only=True)
+                 skew=skew, size_mult=1.0, neutral_long_only=True, **bt_kwargs)
     rB3 = BT.run(fB, cB, sB, use_regime=True, bias_series=bias_arr,
-                 skew=skew, size_mult=1.0, neutral_long_only=True, neutral_flat_aside=True)
+                 skew=skew, size_mult=1.0, neutral_long_only=True, neutral_flat_aside=True, **bt_kwargs)
     print(f"[ok] A={rA.metrics.get('交易次数')}  B={rB.metrics.get('交易次数')}  "
           f"B2={rB2.metrics.get('交易次数')}  B3={rB3.metrics.get('交易次数')} 笔")
 
@@ -141,13 +161,13 @@ def main():
             continue
         sub = fA[mask].reset_index(drop=True)
         ssub = sA[mask].reset_index(drop=True)
-        ra = BT.run(sub, cfg, ssub, bias=0, size_mult=1.0, veto=False)
+        ra = BT.run(sub, cfg, ssub, bias=0, size_mult=1.0, veto=False, **bt_kwargs)
         rb2 = BT.run(fB[mask].reset_index(drop=True), cB, sB[mask].reset_index(drop=True),
                      use_regime=True, bias_series=bias_arr[mask],
-                     skew=skew, size_mult=1.0, neutral_long_only=True)
+                     skew=skew, size_mult=1.0, neutral_long_only=True, **bt_kwargs)
         rb3 = BT.run(fB[mask].reset_index(drop=True), cB, sB[mask].reset_index(drop=True),
                      use_regime=True, bias_series=bias_arr[mask],
-                     skew=skew, size_mult=1.0, neutral_long_only=True, neutral_flat_aside=True)
+                     skew=skew, size_mult=1.0, neutral_long_only=True, neutral_flat_aside=True, **bt_kwargs)
         ma, mb2, mb3 = ra.metrics, rb2.metrics, rb3.metrics
         if ma.get("交易次数", 0) < 3 or mb3.get("交易次数", 0) < 3:
             continue
@@ -178,10 +198,20 @@ def main():
     L.append(f"- 历史 bias 来源：{bias_src}；窗口内分布 多 {nb} / 中性 {nz} / 空 {ns} 天")
     L.append(f"- 生产默认口径（config.yaml）：regime=B3、skew={skew}、"
              f"neutral_long_only=true、neutral_flat_aside=true、min_score={cfg['entry']['min_score']}")
-    L.append(f"- 资金与成本：初始 {int(cfg['backtest']['initial_capital']):,} 美元、点差 "
-             f"{cfg['backtest']['spread_points']} 点、1 手=100 盎司、单笔风险 "
-             f"{cfg['risk']['account_risk_pct']}%、凯利半仓上限 "
-             f"{cfg['risk']['kelly_cap']*100:.0f}%")
+    if fixed_lot is None and fixed_risk_pct is None:
+        risk_note = (f"单笔风险 {cfg['risk']['account_risk_pct']}%、凯利半仓上限 "
+                     f"{cfg['risk']['kelly_cap']*100:.0f}%")
+    else:
+        risk_note = "手数模式见下方说明（不按风险%/凯利缩放）"
+    L.append(f"- 资金与成本：初始 {int(capital):,} 美元、点差 "
+             f"{cfg['backtest']['spread_points']} 点、1 手=100 盎司、{risk_note}")
+    if fixed_lot is not None:
+        L.append(f"- **固定手数模式**：每笔基础 {fixed_lot} 手，再乘以 regime 多空偏斜"
+                 f"（多×1.00 / 空×{skew}）；初始资金 {int(capital):,} 美元，不再按风险% 缩放。")
+    if fixed_risk_pct is not None:
+        L.append(f"- **ATR 等价固定风险模式**：每笔风险固定 {fixed_risk_pct}% 权益，"
+                 f"手数按止损 ATR 距离反推（不乘凯利/基本面 sizeMult，仅保留 regime 多空偏斜"
+                 f" 多×1.00 / 空×{skew}）；杠杆随波动自适应。初始资金 {int(capital):,} 美元。")
     L.append(f"- 出场：布林(13,1.618)、初始止损≥{cfg['exit']['initial_stop_min_atr']}ATR、"
              f"最大持有 {cfg['exit']['max_hold_bars']} 根、ATR 跟进激活 {cfg['exit']['trailing']['activate_atr']}ATR\n")
 

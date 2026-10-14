@@ -44,6 +44,11 @@ string g_lbl[PANEL_MAX_LBL];
 int    g_curLbl = 0;
 
 //+------------------------------------------------------------------+
+//| Position sizing mode                                                                   |
+//+------------------------------------------------------------------+
+enum ENUM_LOT_MODE { LOT_RISK = 0, LOT_FIXED = 1, LOT_ATR_RISK = 2 };
+
+//+------------------------------------------------------------------+
 //| Input parameters                                                                       |
 //+------------------------------------------------------------------+
 input group "===== Symbol & Execution ====="
@@ -115,6 +120,8 @@ input group "===== Position & Risk ====="
 input double  InpRiskPct       = 1.0;           // risk per trade as % of equity
 input bool    InpUseKelly      = true;          // use Python-side Kelly f*
 input double  InpMaxLots       = 5.0;
+input ENUM_LOT_MODE InpLotMode = LOT_RISK;     // position sizing mode (0=risk-based %, 1=fixed lots, 2=ATR-equalized fixed risk%)
+input double  InpFixedLots     = 0.1;          // fixed lots per trade (used when InpLotMode = LOT_FIXED)
 input int     InpMaxSpreadPts  = 60;            // spread filter (points)
 
 input group "===== Fundamental File ====="
@@ -340,12 +347,35 @@ void OnTick()
    double stop  = (st.dir != 0) ? st.stop
                                 : ((dir > 0) ? entry - InpFallbackATR * g_b1.atr[1]
                                              : entry + InpFallbackATR * g_b1.atr[1]);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double kelly  = InpUseKelly ? g_fund.kelly : 0.0;
-   double base   = g_fund.loaded ? g_fund.sizeMult : 1.0;
-   double smult  = (dir > 0) ? base * longSkew : base * shortSkew;
-   double lots = DinaLotsForRisk(g_sym, equity, InpRiskPct, kelly, smult,
-                                 MathAbs(entry - stop), InpMaxLots);
+   double lots;
+   if(InpLotMode == LOT_FIXED)
+   {
+      // Fixed-lot mode: a constant base lot, still scaled by the regime's
+      // long/short skew (long=longSkew, short=shortSkew). The fundamental size
+      // multiplier is NOT applied, so the lot stays literal regardless of equity.
+      lots = DinaNormalizeLot(g_sym, InpFixedLots * (dir > 0 ? longSkew : shortSkew));
+   }
+   else if(InpLotMode == LOT_ATR_RISK)
+   {
+      // ATR-equalized fixed-risk mode: each trade risks exactly InpRiskPct% of
+      // equity, with the lot derived from the stop's ATR distance. Kelly and the
+      // fundamental size multiplier are NOT applied; only the regime long/short
+      // skew (longSkew/shortSkew) is kept so the leverage stays volatility-adaptive
+      // but conviction-neutral.
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double smult  = (dir > 0) ? longSkew : shortSkew;
+      lots = DinaLotsForRisk(g_sym, equity, InpRiskPct, 0.0, smult,
+                            MathAbs(entry - stop), InpMaxLots);
+   }
+   else
+   {
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double kelly  = InpUseKelly ? g_fund.kelly : 0.0;
+      double base   = g_fund.loaded ? g_fund.sizeMult : 1.0;
+      double smult  = (dir > 0) ? base * longSkew : base * shortSkew;
+      lots = DinaLotsForRisk(g_sym, equity, InpRiskPct, kelly, smult,
+                            MathAbs(entry - stop), InpMaxLots);
+   }
 
    PrintFormat("[Dina] signal %s dir=%d price=%.2f stop=%.2f lots=%.2f ATR=%.2f",
                why, dir, entry, stop, lots, g_b1.atr[1]);

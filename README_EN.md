@@ -208,6 +208,13 @@ The EA draws a colored panel with `OBJ_LABEL` at the top‑left of the chart (re
 | `InpMaxSpreadPts` | 60 | Spread filter |
 | `InpSignalFile` | gold_signal.ini | Placed in `<MT5>/MQL5/Files/` |
 | `InpMaxSignalAgeHours` | 24 | Signal file staleness threshold; beyond this fall back to conservative long‑only |
+| `InpLotMode` | 0 (LOT_RISK) | Lot‑sizing mode: 0=risk% mode (InpRiskPct+half‑Kelly) / 1=fixed lots (InpFixedLots) / 2=ATR‑equalized fixed‑risk% (InpRiskPct as per‑trade risk%) |
+| `InpFixedLots` | 0.1 | Fixed lots per trade (only when InpLotMode=1) |
+
+> **Three lot‑sizing modes (`InpLotMode`)**:
+> - `LOT_RISK=0` (default): per‑trade risk = `InpRiskPct`% of equity, times half‑Kelly f* and fundamental `size_mult`; long×1.0 / short×0.4.
+> - `LOT_FIXED=1`: fixed `InpFixedLots` lots per trade, still scaled by the regime long/short skew (long×1.0 / short×0.4); ignores risk%/Kelly/fundamental.
+> - `LOT_ATR_RISK=2`: per‑trade risk fixed at `InpRiskPct`% of equity, lot derived inversely from the stop's ATR distance (scale down when volatile, up when calm); ignores Kelly/fundamental, keeps only the long/short skew; leverage adapts to volatility.
 
 ---
 
@@ -265,6 +272,16 @@ Initial $100k, 30‑pt spread, 1.0% per‑trade risk, half‑Kelly capped at 3%.
 | 2026 | 101 | 1.22 | 14.42 | 7.53 |
 
 **Framework value**: down years (2021/2022/2026) clearly cut losses vs pure‑long; up years (2023‑2025) roughly持平 (hold even) — it trades "lose less in headwinds" for higher Sharpe, not chasing bull runs. Shorts only make money when the fundamental is short (`空|空偏*` brackets PF mostly ≥1), confirming shorts are directioned by fundamentals and must not be abused.
+
+### Three Lot‑Sizing Modes Compared (B3 caliber; returns/DD/Sharpe are capital‑independent)
+
+| Lot mode | Total% | CAGR% | Max DD% | Sharpe | PF | Exp./trade |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fixed 0.1 lot (LOT_FIXED) | +177.8 | 19.5 | 28.9 | 0.68 | 1.20 | $13.9 |
+| ATR risk 1% (LOT_ATR_RISK, InpRiskPct=1.0) | +91.9 | 12.0 | 22.1 | 0.72 | 1.21 | $7.2 |
+| ATR risk 2% (LOT_ATR_RISK, InpRiskPct=2.0) | +228.3 | 23.0 | 41.6 | 0.72 | 1.22 | $18.1 |
+
+> Note: ATR modes are **volatility‑targeting** (scale down when volatile, up when calm) — counter‑cyclical de‑leveraging; the fixed 0.1‑lot mode is **pro‑cyclical** (wider ATR → larger per‑trade risk → adds size in turbulent periods), hence its larger drawdown. 1% and 2% share the same Sharpe (proportional leverage doesn't change Sharpe) but both beat the fixed‑lot 0.68; pick ATR 1% for stability, ATR 2% for growth.
 
 ---
 
